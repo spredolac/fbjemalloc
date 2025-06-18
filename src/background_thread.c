@@ -112,6 +112,7 @@ background_thread_info_init(tsdn_t *tsdn, background_thread_info_t *info) {
 		info->tot_n_runs = 0;
 		nstime_init_zero(&info->tot_sleep_time);
 	}
+	hpa_global_purge_init(&info->hpa_purge);
 }
 
 static inline bool
@@ -154,7 +155,7 @@ set_current_thread_affinity(int cpu) {
 
 #define BILLION UINT64_C(1000000000)
 /* Minimal sleep interval 100 ms. */
-#define BACKGROUND_THREAD_MIN_INTERVAL_NS (BILLION / 10)
+#	define BACKGROUND_THREAD_MIN_INTERVAL_NS (BILLION / 10)
 
 static int
 background_thread_cond_wait(background_thread_info_t *info,
@@ -249,8 +250,13 @@ background_work_sleep_once(tsdn_t *tsdn, background_thread_info_t *info,
     unsigned ind) {
 	uint64_t ns_until_deferred = BACKGROUND_THREAD_DEFERRED_MAX;
 	unsigned narenas = narenas_total_get();
+	unsigned nshard_stats = manual_arena_base / max_background_threads + 1;
 	bool slept_indefinitely = background_thread_indefinite_sleep(info);
+	hpa_shard_t *hpa_shards[nshard_stats];
+	size_t nhpa_shards = 0;
 
+	hpa_global_purge_realloc(tsdn, &info->hpa_purge, nshard_stats);
+	
 	for (unsigned i = ind; i < narenas; i += max_background_threads) {
 		arena_t *arena = arena_get(tsdn, i, false);
 		if (!arena) {
@@ -261,9 +267,21 @@ background_work_sleep_once(tsdn_t *tsdn, background_thread_info_t *info,
 		 * do the work instantly, but rather check when the deferred
 		 * work that caused this thread to wake up is scheduled for.
 		 */
-		if (!slept_indefinitely) {
+		hpa_shard_t *shard =
+		    opt_global_purge_period_secs != 0 &&
+		    info->hpa_purge.analytics != NULL &&
+		    pa_shard_uses_hpa(&arena->pa_shard) &&
+		    arena_is_auto(arena) ?
+		    &arena->pa_shard.hpa_shard :
+		    NULL;
+		if (!slept_indefinitely && shard != NULL) {
+			arena_decay(tsdn, arena, true, false);
+			hpa_shards[nhpa_shards] = shard;
+			nhpa_shards++;
+		} else if (!slept_indefinitely) {
 			arena_do_deferred_work(tsdn, arena);
 		}
+
 		if (ns_until_deferred <= BACKGROUND_THREAD_MIN_INTERVAL_NS) {
 			/* Min interval will be used. */
 			continue;
@@ -273,6 +291,20 @@ background_work_sleep_once(tsdn_t *tsdn, background_thread_info_t *info,
 		if (ns_arena_deferred < ns_until_deferred) {
 			ns_until_deferred = ns_arena_deferred;
 		}
+	}
+
+	if (nhpa_shards > 0) {
+		nstime_t now;
+		nstime_init_update(&now);
+
+		hpa_global_purge_read(tsdn, &info->hpa_purge, hpa_shards,
+				      nhpa_shards);
+		size_t npurge = hpa_global_purge_tick(&info->hpa_purge,
+						      nhpa_shards, &now);
+		if (npurge > 0) {
+			hpa_global_purge(tsdn, &info->hpa_purge, nhpa_shards,
+					 npurge);
+		} /* else hugify on period tick ??? */
 	}
 
 	uint64_t sleep_ns;
@@ -857,3 +889,40 @@ background_thread_boot1(tsdn_t *tsdn, base_t *base) {
 #endif
 	return false;
 }
+
+/* Exposed for testing */
+/* #ifdef JEMALLOC_JET */
+/* void */
+/* background_thread_hpa_purge_init_test(background_thread_hpa_purge_t *hpa_purge) { */
+/* 	hpa_purge_init(hpa_purge); */
+/* } */
+
+/* size_t */
+/* background_thread_read_analytics_test(tsdn_t *tsdn, */
+/* 				      background_thread_hpa_purge_t *hpa_purge, */
+/* 				      hpa_shard_t **shards, */
+/* 				      size_t nshards) { */
+/* 	return hpa_purge_read_analytics(tsdn, hpa_purge, shards, */
+/* 						nshards); */
+/* } */
+
+/* void */
+/* realloc_stats_if_needed_test(tsdn_t *tsdn, */
+/* 			     background_thread_hpa_purge_t *hpa_purge, */
+/* 			     size_t nshards) { */
+/* 	realloc_stats_if_needed(tsdn, hpa_purge, nshards); */
+/* } */
+
+/* size_t */
+/* background_thread_hpa_purge_tick_test(background_thread_hpa_purge_t *hpa_purge, */
+/* 				      size_t nshards, nstime_t *now) { */
+/* 	return hpa_purge_tick(hpa_purge, nshards, now); */
+/* } */
+
+/* size_t */
+/* background_thread_hpa_do_purge_test(tsdn_t *tsdn, */
+/* 				    background_thread_hpa_purge_t *hpa_purge, */
+/* 				    size_t nshards, size_t npurge) { */
+/* 	return npurge; */
+/* } */
+/* #endif */
