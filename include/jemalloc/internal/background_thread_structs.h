@@ -2,6 +2,7 @@
 #define JEMALLOC_INTERNAL_BACKGROUND_THREAD_STRUCTS_H
 
 #include "jemalloc/internal/jemalloc_preamble.h"
+#include "jemalloc/internal/hpa_global_purge.h"
 #include "jemalloc/internal/mutex.h"
 
 /* This file really combines "structs" and "types", but only transitionally. */
@@ -55,6 +56,7 @@ struct background_thread_info_s {
 	uint64_t		tot_n_runs;
 	/* Stats: total sleep time since started. */
 	nstime_t		tot_sleep_time;
+	hpa_global_purge_t hpa_purge;
 };
 typedef struct background_thread_info_s background_thread_info_t;
 

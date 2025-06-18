@@ -809,7 +809,7 @@ TEST_BEGIN(test_purge_prefers_empty) {
 
 	hpdata_t hpdata_empty;
 	hpdata_t hpdata_nonempty;
-	hpdata_init(&hpdata_empty, (void *)(10 * HUGEPAGE), 123);
+	hpdata_init(&hpdata_empty, (void *)(10 * HUGEPAGE), 1231);
 	psset_insert(&psset, &hpdata_empty);
 	hpdata_init(&hpdata_nonempty, (void *)(11 * HUGEPAGE), 456);
 	psset_insert(&psset, &hpdata_nonempty);
@@ -891,16 +891,22 @@ TEST_BEGIN(test_purge_prefers_empty_huge) {
 	 * alternating order.  We should pop all the huge ones before popping
 	 * any of the non-huge ones for purging.
 	 */
+	uint64_t prior_age = UINT64_MAX;
 	for (int i = 0; i < NHP; i++) {
 		hpdata_t *to_purge = psset_pick_purge(&psset);
-		expect_ptr_eq(&hpdata_huge[i], to_purge, "");
+		expect_false(hpdata_huge_get(to_purge), "");
+		expect_true(hpdata_age_get(to_purge) < prior_age, "");
+                prior_age = hpdata_age_get(to_purge);
 		psset_update_begin(&psset, to_purge);
 		hpdata_purge_allowed_set(to_purge, false);
 		psset_update_end(&psset, to_purge);
 	}
+	prior_age = UINT64_MAX; 
 	for (int i = 0; i < NHP; i++) {
 		hpdata_t *to_purge = psset_pick_purge(&psset);
-		expect_ptr_eq(&hpdata_nonhuge[i], to_purge, "");
+		expect_true(hpdata_huge_get(to_purge), "");
+		expect_true(hpdata_age_get(to_purge) < prior_age, "");
+		prior_age = hpdata_age_get(to_purge);
 		psset_update_begin(&psset, to_purge);
 		hpdata_purge_allowed_set(to_purge, false);
 		psset_update_end(&psset, to_purge);

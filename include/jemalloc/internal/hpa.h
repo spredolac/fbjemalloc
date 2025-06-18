@@ -154,6 +154,7 @@ struct hpa_shard_s {
 };
 
 bool hpa_hugepage_size_exceeds_limit(void);
+
 /*
  * Whether or not the HPA can be used given the current configuration.  This is
  * is not necessarily a guarantee that it backs its allocations by hugepages,
@@ -189,5 +190,14 @@ void hpa_shard_prefork3(tsdn_t *tsdn, hpa_shard_t *shard);
 void hpa_shard_prefork4(tsdn_t *tsdn, hpa_shard_t *shard);
 void hpa_shard_postfork_parent(tsdn_t *tsdn, hpa_shard_t *shard);
 void hpa_shard_postfork_child(tsdn_t *tsdn, hpa_shard_t *shard);
+
+size_t
+hpa_try_purge_then_hugify(
+    tsdn_t *tsdn, hpa_shard_t *shard, size_t ntarget, psset_bin_stats_t *stats,
+    bool *blocked_by_dirty, bool *should_purge);
+size_t hpa_try_hugify_all(tsdn_t *tsdn, hpa_shard_t *shard);
+bool hpa_purge_analytics_read(tsdn_t *tsdn, hpa_shard_t *shard, bool trylock,
+			      psset_bin_stats_t *stats, bool *blocked_by_dirty,
+			      bool *should_purge);
 
 #endif /* JEMALLOC_INTERNAL_HPA_H */
