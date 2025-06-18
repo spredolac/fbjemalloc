@@ -13,10 +13,7 @@ psset_init(psset_t *psset) {
 	fb_init(psset->pageslab_bitmap, PSSET_NPSIZES);
 	memset(&psset->stats, 0, sizeof(psset->stats));
 	hpdata_empty_list_init(&psset->empty);
-	for (int i = 0; i < PSSET_NPURGE_LISTS; i++) {
-		hpdata_purge_list_init(&psset->to_purge[i]);
-	}
-	fb_init(psset->purge_bitmap, PSSET_NPURGE_LISTS);
+	hpdata_rev_age_heap_new(&psset->purge_heap);
 	hpdata_hugify_list_init(&psset->to_hugify);
 }
 
@@ -220,70 +217,22 @@ psset_alloc_container_remove(psset_t *psset, hpdata_t *ps) {
 	}
 }
 
-static size_t
-psset_purge_list_ind(hpdata_t *ps) {
-	size_t ndirty = hpdata_ndirty_get(ps);
-	/* Shouldn't have something with no dirty pages purgeable. */
-	assert(ndirty > 0);
-	/*
-	 * Higher indices correspond to lists we'd like to purge earlier; make
-	 * the two highest indices correspond to empty lists, which we attempt
-	 * to purge before purging any non-empty list.  This has two advantages:
-	 * - Empty page slabs are the least likely to get reused (we'll only
-	 *   pick them for an allocation if we have no other choice).
-	 * - Empty page slabs can purge every dirty page they contain in a
-	 *   single call, which is not usually the case.
-	 *
-	 * We purge hugeified empty slabs before nonhugeified ones, on the basis
-	 * that they are fully dirty, while nonhugified slabs might not be, so
-	 * we free up more pages more easily.
-	 */
-	if (hpdata_nactive_get(ps) == 0) {
-		if (hpdata_huge_get(ps)) {
-			return PSSET_NPURGE_LISTS - 1;
-		} else {
-			return PSSET_NPURGE_LISTS - 2;
-		}
-	}
-
-	pszind_t pind = sz_psz2ind(sz_psz_quantize_floor(ndirty << LG_PAGE));
-	/*
-	 * For non-empty slabs, we may reuse them again.  Prefer purging
-	 * non-hugeified slabs before hugeified ones then, among pages of
-	 * similar dirtiness.  We still get some benefit from the hugification.
-	 */
-	return (size_t)pind * 2 + (hpdata_huge_get(ps) ? 0 : 1);
-}
-
 static void
 psset_maybe_remove_purge_list(psset_t *psset, hpdata_t *ps) {
 	/*
-	 * Remove the hpdata from its purge list (if it's in one).  Even if it's
-	 * going to stay in the same one, by appending it during
-	 * psset_update_end, we move it to the end of its queue, so that we
-	 * purge LRU within a given dirtiness bucket.
+	 * Remove the hpdata from the heap.
+	 * TODO: avoid this completely.
 	 */
 	if (hpdata_purge_allowed_get(ps)) {
-		size_t ind = psset_purge_list_ind(ps);
-		hpdata_purge_list_t *purge_list = &psset->to_purge[ind];
-		hpdata_purge_list_remove(purge_list, ps);
-		if (hpdata_purge_list_empty(purge_list)) {
-			fb_unset(psset->purge_bitmap, PSSET_NPURGE_LISTS, ind);
-		}
+		hpdata_rev_age_heap_remove(&psset->purge_heap, ps);
 	}
 }
 
 static void
 psset_maybe_insert_purge_list(psset_t *psset, hpdata_t *ps) {
 	if (hpdata_purge_allowed_get(ps)) {
-		size_t ind = psset_purge_list_ind(ps);
-		hpdata_purge_list_t *purge_list = &psset->to_purge[ind];
-		if (hpdata_purge_list_empty(purge_list)) {
-			fb_set(psset->purge_bitmap, PSSET_NPURGE_LISTS, ind);
-		}
-		hpdata_purge_list_append(purge_list, ps);
+		hpdata_rev_age_heap_insert(&psset->purge_heap, ps);
 	}
-
 }
 
 void
@@ -392,18 +341,14 @@ psset_pick_alloc(psset_t *psset, size_t size) {
 
 hpdata_t *
 psset_pick_purge(psset_t *psset) {
-	ssize_t ind_ssz = fb_fls(psset->purge_bitmap, PSSET_NPURGE_LISTS,
-	    PSSET_NPURGE_LISTS - 1);
-	if (ind_ssz < 0) {
+	if (hpdata_rev_age_heap_empty(&psset->purge_heap)) {
 		return NULL;
 	}
-	pszind_t ind = (pszind_t)ind_ssz;
-	assert(ind < PSSET_NPURGE_LISTS);
-	hpdata_t *ps = hpdata_purge_list_first(&psset->to_purge[ind]);
+	hpdata_t *ps = hpdata_rev_age_heap_first(&psset->purge_heap);
 	assert(ps != NULL);
 	return ps;
 }
-
+    
 hpdata_t *
 psset_pick_hugify(psset_t *psset) {
 	return hpdata_hugify_list_first(&psset->to_hugify);

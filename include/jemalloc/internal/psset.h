@@ -99,12 +99,9 @@ struct psset_s {
 	hpdata_empty_list_t empty;
 	/*
 	 * Slabs which are available to be purged, ordered by how much we want
-	 * to purge them (with later indices indicating slabs we want to purge
-	 * more).
+	 * to purge them.
 	 */
-	hpdata_purge_list_t to_purge[PSSET_NPURGE_LISTS];
-	/* Bitmap for which set bits correspond to non-empty purge lists. */
-	fb_group_t purge_bitmap[FB_NGROUPS(PSSET_NPURGE_LISTS)];
+	hpdata_rev_age_heap_t purge_heap;
 	/* Slabs which are available to be hugified. */
 	hpdata_hugify_list_t to_hugify;
 };

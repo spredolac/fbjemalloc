@@ -15,7 +15,26 @@ hpdata_age_comp(const hpdata_t *a, const hpdata_t *b) {
 	return (a_age > b_age) - (a_age < b_age);
 }
 
+static int
+hpdata_rev_age_comp(const hpdata_t *a, const hpdata_t *b) {
+	/* Empty first, then youngest non-empty */
+	int empty_cmp = hpdata_empty(b) - hpdata_empty(a);
+	if (empty_cmp) {
+		return empty_cmp;
+	}
+	if (hpdata_empty(b)) {
+		assert(hpdata_empty(a));
+		int huge_cmp = hpdata_huge_get(b) - hpdata_huge_get(a);
+		if (huge_cmp) {
+			return huge_cmp;
+		}
+	}
+	
+	return hpdata_age_comp(b, a);
+}
+
 ph_gen(, hpdata_age_heap, hpdata_t, age_link, hpdata_age_comp)
+ph_gen(, hpdata_rev_age_heap, hpdata_t, rev_age_link, hpdata_rev_age_comp)
 
 void
 hpdata_init(hpdata_t *hpdata, void *addr, uint64_t age) {

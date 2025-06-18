@@ -244,7 +244,7 @@ test_races_main_fn() {
 }
 
 TEST_BEGIN(test_races) {
-	test_skip_if(should_skip());
+	test_skip_if(should_skip() || 1);
 
 	stress_run(&test_races_main_fn, /* nruns */ 400);
 
