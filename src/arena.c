@@ -680,17 +680,10 @@ arena_bin_slabs_full_remove(arena_t *arena, bin_t *bin, edata_t *slab) {
 }
 
 static void
-arena_bin_reset(tsd_t *tsd, arena_t *arena, bin_t *bin, unsigned binind) {
+arena_bin_reset(tsd_t *tsd, arena_t *arena, bin_t *bin) {
 	edata_t *slab;
 
 	malloc_mutex_lock(tsd_tsdn(tsd), &bin->lock);
-
-	if (arena_bin_has_batch(binind)) {
-		bin_with_batch_t *batched_bin = (bin_with_batch_t *)bin;
-		batcher_init(&batched_bin->remote_frees,
-		    BIN_REMOTE_FREE_ELEMS_MAX);
-	}
-
 	if (bin->slabcur != NULL) {
 		slab = bin->slabcur;
 		bin->slabcur = NULL;
@@ -841,8 +834,7 @@ arena_reset(tsd_t *tsd, arena_t *arena) {
 	/* Bins. */
 	for (unsigned i = 0; i < SC_NBINS; i++) {
 		for (unsigned j = 0; j < bin_infos[i].n_shards; j++) {
-			arena_bin_reset(tsd, arena, arena_get_bin(arena, i, j),
-			    i);
+			arena_bin_reset(tsd, arena, arena_get_bin(arena, i, j));
 		}
 	}
 	pa_shard_reset(tsd_tsdn(tsd), &arena->pa_shard);
@@ -1109,18 +1101,8 @@ arena_cache_bin_fill_small(tsdn_t *tsdn, arena_t *arena,
 	unsigned binshard;
 	bin_t *bin = arena_bin_choose(tsdn, arena, binind, &binshard);
 
-	/*
-	 * This has some fields that are conditionally initialized down batch
-	 * flush pathways.  This can trigger static analysis warnings deeper
-	 * down in the static.  The accesses are guarded by the same checks as
-	 * the initialization, but the analysis isn't able to track that across
-	 * multiple stack frames.
-	 */
-	arena_bin_flush_batch_state_t batch_flush_state
-	    JEMALLOC_CLANG_ANALYZER_SILENCE_INIT({0});
 label_refill:
 	malloc_mutex_lock(tsdn, &bin->lock);
-	arena_bin_flush_batch_after_lock(tsdn, arena, bin, binind, &batch_flush_state);
 
 	while (filled < nfill_min) {
 		/* Try batch-fill from slabcur first. */
@@ -1181,11 +1163,7 @@ label_refill:
 		cache_bin->tstats.nrequests = 0;
 	}
 
-	arena_bin_flush_batch_before_unlock(tsdn, arena, bin, binind,
-	    &batch_flush_state);
 	malloc_mutex_unlock(tsdn, &bin->lock);
-	arena_bin_flush_batch_after_unlock(tsdn, arena, bin, binind,
-	    &batch_flush_state);
 
 	if (alloc_and_retry) {
 		assert(fresh_slab == NULL);
@@ -1477,16 +1455,12 @@ arena_dalloc_bin(tsdn_t *tsdn, arena_t *arena, edata_t *edata, void *ptr) {
 	malloc_mutex_lock(tsdn, &bin->lock);
 	arena_dalloc_bin_locked_info_t info;
 	arena_dalloc_bin_locked_begin(&info, binind);
-	edata_t *dalloc_slabs[1];
-	unsigned dalloc_slabs_count = 0;
-	arena_dalloc_bin_locked_step(tsdn, arena, bin, &info, binind, edata,
-	    ptr, dalloc_slabs, /* ndalloc_slabs */ 1, &dalloc_slabs_count,
-	    /* dalloc_slabs_extra */ NULL);
+	bool ret = arena_dalloc_bin_locked_step(tsdn, arena, bin,
+	    &info, binind, edata, ptr);
 	arena_dalloc_bin_locked_finish(tsdn, arena, bin, &info);
 	malloc_mutex_unlock(tsdn, &bin->lock);
 
-	if (dalloc_slabs_count != 0) {
-		assert(dalloc_slabs[0] == edata);
+	if (ret) {
 		arena_slab_dalloc(tsdn, arena, edata);
 	}
 }
@@ -1785,7 +1759,7 @@ arena_new(tsdn_t *tsdn, unsigned ind, const arena_config_t *config) {
 	for (unsigned i = 0; i < SC_NBINS; i++) {
 		for (unsigned j = 0; j < bin_infos[i].n_shards; j++) {
 			bin_t *bin = arena_get_bin(arena, i, j);
-			bool err = bin_init(bin, i);
+			bool err = bin_init(bin);
 			if (err) {
 				goto label_error;
 			}
