@@ -22,14 +22,11 @@ hpdata_rev_age_comp(const hpdata_t *a, const hpdata_t *b) {
 	if (empty_cmp) {
 		return empty_cmp;
 	}
-	if (hpdata_empty(b)) {
-		assert(hpdata_empty(a));
-		int huge_cmp = hpdata_huge_get(b) - hpdata_huge_get(a);
-		if (huge_cmp) {
-			return huge_cmp;
-		}
+	/* Non huge first */
+	int huge_cmp = hpdata_huge_get(a) - hpdata_huge_get(b);
+	if (huge_cmp) {
+		return huge_cmp;
 	}
-	
 	return hpdata_age_comp(b, a);
 }
 
