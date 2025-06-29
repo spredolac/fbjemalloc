@@ -5,6 +5,17 @@
 
 static int
 hpdata_age_comp(const hpdata_t *a, const hpdata_t *b) {
+	/* Huge before non-huge */
+	int huge_cmp = hpdata_huge_get(b) - hpdata_huge_get(a);
+	if (huge_cmp) {
+		return huge_cmp;
+	}
+
+	huge_cmp = hpdata_hugify_allowed_get(b) - hpdata_hugify_allowed_get(a);
+	if (huge_cmp) {
+		return huge_cmp;
+	}
+
 	uint64_t a_age = hpdata_age_get(a);
 	uint64_t b_age = hpdata_age_get(b);
 	/*
