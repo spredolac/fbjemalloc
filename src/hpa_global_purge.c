@@ -202,6 +202,9 @@ hpa_global_purge(tsdn_t *tsdn, hpa_global_purge_t *hpa_purge, size_t nshards,
 							  &cur->hugify_blocked_by_dirty,
 							  &cur->should_purge);
 		purged += ndirty;
+		if (ndirty > 0 && cur->should_purge) {
+			hpa_gpheap_insert(&pheap, cur);
+		}
 	}
 
 	/* Try to hugify, the rest if possible */

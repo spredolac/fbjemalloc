@@ -824,11 +824,11 @@ hpa_try_purge_then_hugify(
 						      should_purge);
 	}
 #endif
-	size_t unlimited_nhp = (size_t) -1;
+	size_t max_nhp = (ntarget == SIZE_T_MAX) ? (size_t) -1 : 1;
 	malloc_mutex_lock(tsdn, &shard->mtx);
 	size_t before = shard->stats.npurges;
 	
-	hpa_purge(tsdn, shard, unlimited_nhp, ntarget);
+	hpa_purge(tsdn, shard, max_nhp, ntarget);
 	size_t npurged = shard->stats.npurges - before;
 	while (hpa_try_hugify(tsdn, shard)) {
 		/* nothing */
