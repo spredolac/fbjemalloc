@@ -203,7 +203,7 @@ hpdata_allow_hugify(hpdata_t *hpdata, nstime_t now) {
 }
 
 static inline nstime_t
-hpdata_time_hugify_allowed(hpdata_t *hpdata) {
+hpdata_time_hugify_allowed(const hpdata_t *hpdata) {
 	return hpdata->h_time_hugify_allowed;
 }
 
@@ -285,22 +285,22 @@ hpdata_longest_free_range_set(hpdata_t *hpdata, size_t longest_free_range) {
 }
 
 static inline size_t
-hpdata_nactive_get(hpdata_t *hpdata) {
+hpdata_nactive_get(const hpdata_t *hpdata) {
 	return hpdata->h_nactive;
 }
 
 static inline size_t
-hpdata_ntouched_get(hpdata_t *hpdata) {
+hpdata_ntouched_get(const hpdata_t *hpdata) {
 	return hpdata->h_ntouched;
 }
 
 static inline size_t
-hpdata_ndirty_get(hpdata_t *hpdata) {
+hpdata_ndirty_get(const hpdata_t *hpdata) {
 	return hpdata->h_ntouched - hpdata->h_nactive;
 }
 
 static inline size_t
-hpdata_nretained_get(hpdata_t *hpdata) {
+hpdata_nretained_get(const hpdata_t *hpdata) {
 	return HUGEPAGE_PAGES - hpdata->h_ntouched;
 }
 
