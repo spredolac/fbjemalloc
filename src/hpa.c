@@ -353,9 +353,9 @@ hpa_update_purge_hugify_eligibility(tsdn_t *tsdn, hpa_shard_t *shard,
 	 * allocator's end at all; we just try to pack allocations in a
 	 * hugepage-friendly manner and let the OS hugify in the background.
 	 */
-	hpdata_purge_allowed_set(ps, hpdata_ndirty_get(ps) > 0);
-	if (hpa_good_hugification_candidate(shard, ps)
-	    && !hpdata_huge_get(ps)) {
+	bool be_huge = hpa_good_hugification_candidate(shard, ps);
+	hpdata_purge_allowed_set(ps, !be_huge && hpdata_ndirty_get(ps) > 0);
+	if (be_huge && !hpdata_huge_get(ps)) {
 		nstime_t now;
 		shard->central->hooks.curtime(&now, /* first_reading */ true);
 		hpdata_allow_hugify(ps, now);

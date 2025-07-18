@@ -613,6 +613,73 @@ TEST_BEGIN(test_min_purge_interval) {
 TEST_END
 
 TEST_BEGIN(test_purge) {
+        test_skip_if(!hpa_supported());
+
+        hpa_hooks_t hooks;
+        hooks.map = &defer_test_map;
+        hooks.unmap = &defer_test_unmap;
+        hooks.purge = &defer_test_purge;
+        hooks.hugify = &defer_test_hugify;
+        hooks.dehugify = &defer_test_dehugify;
+        hooks.curtime = &defer_test_curtime;
+        hooks.ms_since = &defer_test_ms_since;
+        hooks.vectorized_purge = &defer_vectorized_purge;
+
+        hpa_shard_opts_t opts = test_hpa_shard_opts_default;
+        opts.deferral_allowed = true;
+
+        hpa_shard_t *shard = create_test_data(&hooks, &opts);
+
+        bool deferred_work_generated = false;
+
+        nstime_init(&defer_curtime, 0);
+        tsdn_t *tsdn = tsd_tsdn(tsd_fetch());
+        enum {NALLOCS = 8 * HUGEPAGE_PAGES};
+        edata_t *edatas[NALLOCS];
+        for (int i = 0; i < NALLOCS; i++) {
+                edatas[i] = pai_alloc(tsdn, &shard->pai, PAGE, PAGE, false,
+                    false, false, &deferred_work_generated);
+                expect_ptr_not_null(edatas[i], "Unexpected null edata");
+        }
+        /* Deallocate 3 hugepages out of 8. */
+        for (int i = 0; i < 3 * (int)HUGEPAGE_PAGES; i++) {
+                pai_dalloc(tsdn, &shard->pai, edatas[i],
+                    &deferred_work_generated);
+        }
+        nstime_init2(&defer_curtime, 6, 0);
+        hpa_shard_do_deferred_work(tsdn, shard);
+
+        expect_zu_eq(0, ndefer_hugify_calls, "Hugified too early");
+        expect_zu_eq(0, ndefer_dehugify_calls, "Dehugified too early");
+        /*
+         * Expect only 2 purges, because opt.dirty_mult is set to 0.25 and we still
+         * have 5 active hugepages (1 / 5 = 0.2 < 0.25).
+         */
+        expect_zu_eq(2, ndefer_purge_calls, "Expect purges");
+        ndefer_purge_calls = 0;
+
+        nstime_init2(&defer_curtime, 12, 0);
+        hpa_shard_do_deferred_work(tsdn, shard);
+
+        /*
+         * We are still having 5 active hugepages and now they are
+         * matching hugification criteria long enough to actually hugify them.
+         */
+        expect_zu_eq(5, ndefer_hugify_calls, "Expect hugification");
+        ndefer_hugify_calls = 0;
+        expect_zu_eq(0, ndefer_dehugify_calls, "Dehugified too early");
+        /*
+         * We still have completely dirty hugepage, but we are below
+         * opt.dirty_mult.
+         */
+        expect_zu_eq(0, ndefer_purge_calls, "Purged too early");
+        ndefer_purge_calls = 0;
+
+        destroy_test_data(shard);	
+}
+TEST_END
+
+TEST_BEGIN(test_nopurge_when_page_will_still_be_huge) {
 	test_skip_if(!hpa_supported());
 
 	hpa_hooks_t hooks;
@@ -626,7 +693,10 @@ TEST_BEGIN(test_purge) {
 	hooks.vectorized_purge = &defer_vectorized_purge;
 
 	hpa_shard_opts_t opts = test_hpa_shard_opts_default;
+	opts.dirty_mult = FXP_INIT_PERCENT(1);
+	opts.hugification_threshold = 0.75 * HUGEPAGE;
 	opts.deferral_allowed = true;
+	opts.hugify_sync = true;
 
 	hpa_shard_t *shard = create_test_data(&hooks, &opts);
 
@@ -634,50 +704,46 @@ TEST_BEGIN(test_purge) {
 
 	nstime_init(&defer_curtime, 0);
 	tsdn_t *tsdn = tsd_tsdn(tsd_fetch());
-	enum {NALLOCS = 8 * HUGEPAGE_PAGES};
+	enum {NALLOCS = 1 * HUGEPAGE_PAGES};
 	edata_t *edatas[NALLOCS];
+	ndefer_hugify_calls = 0;
+	ndefer_dehugify_calls = 0;
+	ndefer_purge_calls = 0;
 	for (int i = 0; i < NALLOCS; i++) {
 		edatas[i] = pai_alloc(tsdn, &shard->pai, PAGE, PAGE, false,
 		    false, false, &deferred_work_generated);
 		expect_ptr_not_null(edatas[i], "Unexpected null edata");
 	}
-	/* Deallocate 3 hugepages out of 8. */
-	for (int i = 0; i < 3 * (int)HUGEPAGE_PAGES; i++) {
+	nstime_init2(&defer_curtime, 12, 0);
+	hpa_shard_do_deferred_work(tsdn, shard);
+	expect_zu_eq(1, ndefer_hugify_calls, "Did not hugify");
+	expect_zu_eq(0, ndefer_dehugify_calls, "Dehugified too early");
+	expect_zu_eq(0, ndefer_purge_calls, "Did not Expect purges");
+
+	/*
+	 * Deallocate 10% of regular pages in the huge page.  We should purge
+	 * because of dirty_mult, but threshold is still satisfied and no point
+	 * of purging if page is getting hugified again
+	 */
+	int nfrees = NALLOCS / 10;
+	for (int i = 0; i < nfrees; i++) {
 		pai_dalloc(tsdn, &shard->pai, edatas[i],
 		    &deferred_work_generated);
 	}
-	nstime_init2(&defer_curtime, 6, 0);
-	hpa_shard_do_deferred_work(tsdn, shard);
-
-	expect_zu_eq(0, ndefer_hugify_calls, "Hugified too early");
-	expect_zu_eq(0, ndefer_dehugify_calls, "Dehugified too early");
-	/*
-	 * Expect only 2 purges, because opt.dirty_mult is set to 0.25 and we still
-	 * have 5 active hugepages (1 / 5 = 0.2 < 0.25).
-	 */
-	expect_zu_eq(2, ndefer_purge_calls, "Expect purges");
-	ndefer_purge_calls = 0;
-
-	nstime_init2(&defer_curtime, 12, 0);
-	hpa_shard_do_deferred_work(tsdn, shard);
-
-	/*
-	 * We are still having 5 active hugepages and now they are
-	 * matching hugification criteria long enough to actually hugify them.
-	 */
-	expect_zu_eq(5, ndefer_hugify_calls, "Expect hugification");
 	ndefer_hugify_calls = 0;
-	expect_zu_eq(0, ndefer_dehugify_calls, "Dehugified too early");
-	/*
-	 * We still have completely dirty hugepage, but we are below
-	 * opt.dirty_mult.
-	 */
-	expect_zu_eq(0, ndefer_purge_calls, "Purged too early");
+	nstime_init2(&defer_curtime, 120, 0);
+	hpa_shard_do_deferred_work(tsdn, shard);
+	expect_zu_eq(0, ndefer_hugify_calls, "No need to  hugify what is huge");
+	expect_zu_eq(0, ndefer_dehugify_calls, "dehugify should not happen because of threshold");
+	expect_zu_eq(0, ndefer_purge_calls, "No purges from dirty page");
+	ndefer_dehugify_calls = 0;
+	ndefer_hugify_calls = 0;
 	ndefer_purge_calls = 0;
 
 	destroy_test_data(shard);
 }
 TEST_END
+
 
 TEST_BEGIN(test_experimental_max_purge_nhp) {
 	test_skip_if(!hpa_supported());
@@ -809,6 +875,7 @@ main(void) {
 	    test_no_min_purge_interval,
 	    test_min_purge_interval,
 	    test_purge,
+	    test_nopurge_when_page_will_still_be_huge,
 	    test_experimental_max_purge_nhp,
 	    test_vectorized_opt_eq_zero);
 }
