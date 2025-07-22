@@ -186,4 +186,14 @@ void hpa_shard_prefork4(tsdn_t *tsdn, hpa_shard_t *shard);
 void hpa_shard_postfork_parent(tsdn_t *tsdn, hpa_shard_t *shard);
 void hpa_shard_postfork_child(tsdn_t *tsdn, hpa_shard_t *shard);
 
+size_t
+hpa_try_purge_then_hugify(
+    tsdn_t *tsdn, hpa_shard_t *shard, size_t ntarget, pszind_t minbit,
+    psset_bin_stats_t *stats, fb_group_t *purge_bitmap, bool *blocked_by_dirty,
+    bool *should_purge);
+size_t hpa_try_hugify_all(tsdn_t *tsdn, hpa_shard_t *shard);
+bool hpa_purge_analytics_read(tsdn_t *tsdn, hpa_shard_t *shard, bool trylock,
+			      psset_bin_stats_t *stats, fb_group_t *purge_bitmap,
+			      bool *blocked_by_dirty, bool *should_purge);
+
 #endif /* JEMALLOC_INTERNAL_HPA_H */

@@ -245,14 +245,15 @@ psset_purge_list_ind(hpdata_t *ps) {
 			return PSSET_NPURGE_LISTS - 2;
 		}
 	}
+	size_t nonactive = hpdata_nretained_get(ps) + ndirty;
+	/* For huge page we want the one with the most nretained + ndirty */
+	pszind_t pind = hpdata_huge_get(ps) ?
+	    sz_psz2ind(sz_psz_quantize_floor(nonactive << LG_PAGE)) :
+	    sz_psz2ind(sz_psz_quantize_floor(ndirty << LG_PAGE));		       
+	/* TODO: strategy with utilization when it comes to purging. Mirror it instead of age heap*/
 
-	pszind_t pind = sz_psz2ind(sz_psz_quantize_floor(ndirty << LG_PAGE));
-	/*
-	 * For non-empty slabs, we may reuse them again.  Prefer purging
-	 * non-hugeified slabs before hugeified ones then, among pages of
-	 * similar dirtiness.  We still get some benefit from the hugification.
-	 */
-	return (size_t)pind * 2 + (hpdata_huge_get(ps) ? 0 : 1);
+	assert(PSSET_NPURGE_LISTS / 2 == PSSET_NPSIZES);
+	return (hpdata_huge_get(ps) ? 0 : 1) * PSSET_NPSIZES + (size_t)pind;
 }
 
 static void
@@ -391,17 +392,23 @@ psset_pick_alloc(psset_t *psset, size_t size) {
 }
 
 hpdata_t *
-psset_pick_purge(psset_t *psset) {
+psset_pick_purge_and_index(psset_t *psset, pszind_t *ind) {
 	ssize_t ind_ssz = fb_fls(psset->purge_bitmap, PSSET_NPURGE_LISTS,
 	    PSSET_NPURGE_LISTS - 1);
 	if (ind_ssz < 0) {
 		return NULL;
 	}
-	pszind_t ind = (pszind_t)ind_ssz;
-	assert(ind < PSSET_NPURGE_LISTS);
-	hpdata_t *ps = hpdata_purge_list_first(&psset->to_purge[ind]);
+	*ind = (pszind_t)ind_ssz;
+	assert(*ind < PSSET_NPURGE_LISTS);
+	hpdata_t *ps = hpdata_purge_list_first(&psset->to_purge[*ind]);
 	assert(ps != NULL);
 	return ps;
+}
+    
+hpdata_t *
+psset_pick_purge(psset_t *psset) {
+	pszind_t dummy;
+	return psset_pick_purge_and_index(psset, &dummy);
 }
 
 hpdata_t *

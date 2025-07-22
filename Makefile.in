@@ -124,6 +124,7 @@ C_SRCS := $(srcroot)src/jemalloc.c \
 	$(srcroot)src/san_bump.c \
 	$(srcroot)src/hook.c \
 	$(srcroot)src/hpa.c \
+	$(srcroot)src/hpa_global_purge.c \
 	$(srcroot)src/hpa_hooks.c \
 	$(srcroot)src/hpdata.c \
 	$(srcroot)src/inspect.c \
@@ -231,6 +232,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/hash.c \
 	$(srcroot)test/unit/hook.c \
 	$(srcroot)test/unit/hpa.c \
+	$(srcroot)test/unit/hpa_global_purge.c \
 	$(srcroot)test/unit/hpa_vectorized_madvise.c \
 	$(srcroot)test/unit/hpa_vectorized_madvise_large_batch.c \
 	$(srcroot)test/unit/hpa_background_thread.c \

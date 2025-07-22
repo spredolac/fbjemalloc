@@ -455,9 +455,10 @@ hpa_purge_actual_unlocked(hpa_shard_t *shard, hpa_purge_item_t *batch,
  * If there was a page to purge its purge state is initialized
  */
 static inline size_t
-hpa_purge_start_hp(hpa_purge_batch_t *b, psset_t *psset) {
-	hpdata_t *to_purge = psset_pick_purge(psset);
-	if (to_purge == NULL) {
+hpa_purge_start_hp(hpa_purge_batch_t *b, psset_t *psset, pszind_t minbit) {
+	pszind_t bitind = 0;
+	hpdata_t *to_purge = psset_pick_purge_and_index(psset, &bitind);
+	if (to_purge == NULL || bitind < minbit) {
 		return 0;
 	}
 	assert(hpdata_purge_allowed_get(to_purge));
@@ -542,10 +543,13 @@ hpa_batch_empty(hpa_purge_batch_t *b) {
 
 /* Returns number of huge pages purged. */
 static inline size_t
-hpa_purge(tsdn_t *tsdn, hpa_shard_t *shard, size_t max_hp) {
+hpa_purge(tsdn_t *tsdn, hpa_shard_t *shard, size_t max_hp, size_t max_ndirty,
+	  pszind_t minbit) {
 	malloc_mutex_assert_owner(tsdn, &shard->mtx);
 	assert(max_hp > 0);
+	assert(max_ndirty > 0);
 
+	size_t ndirty_total = 0;
 	assert(HPA_PURGE_BATCH_MAX > 0);
 	assert(HPA_PURGE_BATCH_MAX <
 		(VARIABLE_ARRAY_SIZE_MAX / sizeof(hpa_purge_item_t)));
@@ -562,13 +566,16 @@ hpa_purge(tsdn_t *tsdn, hpa_shard_t *shard, size_t max_hp) {
 	while (1) {
 		hpa_batch_pass_start(&batch);
 		assert(hpa_batch_empty(&batch));
-		while(!hpa_batch_full(&batch) && hpa_should_purge(tsdn, shard)) {
-			size_t ndirty = hpa_purge_start_hp(&batch, &shard->psset);
+		while(!hpa_batch_full(&batch) &&
+		      ndirty_total < max_ndirty &&
+		      hpa_should_purge(tsdn, shard)) {
+			size_t ndirty = hpa_purge_start_hp(&batch, &shard->psset, minbit);
 			if (ndirty == 0) {
 				break;
 			}
 			shard->npending_purge += ndirty;
 			batch.npurged_hp_total++;
+			ndirty_total += ndirty;
 		}
 
 		if (hpa_batch_empty(&batch)) {
@@ -710,7 +717,7 @@ hpa_shard_maybe_do_deferred_work(tsdn_t *tsdn, hpa_shard_t *shard,
 		}
 
 		malloc_mutex_assert_owner(tsdn, &shard->mtx);
-		nops += hpa_purge(tsdn, shard, max_purges);
+		nops += hpa_purge(tsdn, shard, max_purges, SIZE_T_MAX, 0);
 		malloc_mutex_assert_owner(tsdn, &shard->mtx);
 	}
 
@@ -722,6 +729,86 @@ hpa_shard_maybe_do_deferred_work(tsdn_t *tsdn, hpa_shard_t *shard,
 		malloc_mutex_assert_owner(tsdn, &shard->mtx);
 		nops++;
 	}
+}
+
+static inline void
+hpa_purge_analytics_read_locked(tsdn_t *tsdn, hpa_shard_t *shard,
+				psset_bin_stats_t *stats, fb_group_t *bitmap,
+				bool *blocked_by_dirty, bool *should_purge) {
+	malloc_mutex_assert_owner(tsdn, &shard->mtx);
+	memcpy(stats, &shard->psset.stats.merged, sizeof(psset_bin_stats_t));
+	memcpy(bitmap, shard->psset.purge_bitmap,
+	       sizeof(fb_group_t) * FB_NGROUPS(PSSET_NPURGE_LISTS));
+	*blocked_by_dirty = hpa_hugify_blocked_by_ndirty(tsdn, shard);
+	*should_purge = hpa_should_purge(tsdn, shard);
+}
+
+bool
+hpa_purge_analytics_read(tsdn_t *tsdn, hpa_shard_t *shard, bool trylock,
+			 psset_bin_stats_t *stats, fb_group_t *purge_bitmap,
+			 bool *blocked_by_dirty, bool *should_purge) {
+	hpa_do_consistency_checks(shard);
+
+	if (trylock) {
+		if(malloc_mutex_trylock(tsdn, &shard->mtx)) {
+			return true;
+		}
+	} else {
+		malloc_mutex_lock(tsdn, &shard->mtx);
+	}
+	hpa_purge_analytics_read_locked(tsdn, shard, stats, purge_bitmap,
+					blocked_by_dirty, should_purge);
+	malloc_mutex_unlock(tsdn, &shard->mtx);
+	return  false;
+}
+
+#ifdef JEMALLOC_JET
+size_t (*hpa_try_purge_then_hugify_hook)(tsdn_t *, hpa_shard_t *, size_t,
+					 fb_group_t *, pszind_t, bool *) = NULL;
+size_t (*hpa_try_hugify_all_hook)(tsdn_t *tsdn, hpa_shard_t *shard) = NULL;
+#endif
+
+size_t
+hpa_try_purge_then_hugify(
+    tsdn_t *tsdn, hpa_shard_t *shard, size_t ntarget, pszind_t minbit,
+    psset_bin_stats_t *stats, fb_group_t *purge_bitmap, bool *blocked_by_dirty,
+    bool *should_purge) {
+#ifdef JEMALLOC_JET
+	if (hpa_try_purge_then_hugify_hook) {
+		return hpa_try_purge_then_hugify_hook(tsdn, shard, ntarget,
+						      purge_bitmap, minbit, should_purge);
+	}
+#endif
+	size_t unlimited_nhp = (size_t) -1;
+	malloc_mutex_lock(tsdn, &shard->mtx);
+	size_t before = shard->stats.npurges;
+	
+	hpa_purge(tsdn, shard, unlimited_nhp, ntarget, minbit);
+	size_t npurged = shard->stats.npurges - before;
+	while (hpa_try_hugify(tsdn, shard)) {
+		/* nothing */
+	}
+	malloc_mutex_assert_owner(tsdn, &shard->mtx);
+	hpa_purge_analytics_read_locked(tsdn, shard, stats, purge_bitmap,
+					blocked_by_dirty, should_purge);
+	malloc_mutex_unlock(tsdn, &shard->mtx);
+	return npurged;
+}
+
+size_t
+hpa_try_hugify_all(tsdn_t *tsdn, hpa_shard_t *shard) {
+#ifdef JEMALLOC_JET
+	if (hpa_try_hugify_all_hook) {
+		return hpa_try_hugify_all_hook(tsdn, shard);
+	}
+#endif
+	malloc_mutex_lock(tsdn, &shard->mtx);
+	size_t ret = 0;
+	while (hpa_try_hugify(tsdn, shard)) {
+		ret++;
+	}
+	malloc_mutex_unlock(tsdn, &shard->mtx);
+	return ret;
 }
 
 static edata_t *

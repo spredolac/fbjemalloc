@@ -121,6 +121,8 @@ void psset_update_end(psset_t *psset, hpdata_t *ps);
 
 /* Analogous to the eset_fit; pick a hpdata to serve the request. */
 hpdata_t *psset_pick_alloc(psset_t *psset, size_t size);
+/* Pick one to purge and fill the index of purge list it lives in. */
+hpdata_t * psset_pick_purge_and_index(psset_t *psset, pszind_t *ind);
 /* Pick one to purge. */
 hpdata_t *psset_pick_purge(psset_t *psset);
 /* Pick one to hugify. */
