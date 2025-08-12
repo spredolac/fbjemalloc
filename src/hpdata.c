@@ -201,6 +201,8 @@ hpdata_purge_begin(hpdata_t *hpdata, hpdata_purge_state_t *purge_state,
 	 * of purging is the TLB shootdowns, rather than the kernel state
 	 * tracking; doing a little bit more of the latter is fine if it saves
 	 * us from doing some of the former.
+	 *
+	 * If page is huge, we purge every base page that is not active.
 	 */
 
 	/*
@@ -212,9 +214,10 @@ hpdata_purge_begin(hpdata_t *hpdata, hpdata_purge_state_t *purge_state,
 	fb_group_t dirty_pages[FB_NGROUPS(HUGEPAGE_PAGES)];
 	fb_init(dirty_pages, HUGEPAGE_PAGES);
 	fb_bit_not(dirty_pages, hpdata->active_pages, HUGEPAGE_PAGES);
-	fb_bit_and(dirty_pages, dirty_pages, hpdata->touched_pages,
-	    HUGEPAGE_PAGES);
-
+	if (!hpdata_huge_get(hpdata)) {
+		fb_bit_and(dirty_pages, dirty_pages, hpdata->touched_pages,
+			   HUGEPAGE_PAGES);
+	}
 	fb_init(purge_state->to_purge, HUGEPAGE_PAGES);
 	size_t next_bit = 0;
 	*nranges = 0;
